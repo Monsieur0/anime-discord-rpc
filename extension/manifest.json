@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "Anime Presence Parser",
+  "version": "2.3",
+  "permissions": [],
+  "host_permissions": [
+    "*://*.yummyani.me/*",
+    "*://*.yummyanime.tv/*",
+    "*://*.animego.me/*",
+    "*://*.wwwanitype.fun/*",
+    "*://*.kodik.info/*",
+    "*://*.kodikplayer.com/*",
+    "*://*.kodik.biz/*",
+    "*://*.kodik.cc/*",
+    "*://*.aniboom.one/*",
+    "*://*.alloha.tv/*",
+    "*://*.cvh.tv/*",
+    "http://127.0.0.1:3000/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.yummyani.me/*",
+        "*://*.yummyanime.tv/*",
+        "*://*.animego.me/*",
+        "*://*.wwwanitype.fun/*",
+        "*://*.kodik.info/*",
+        "*://*.kodikplayer.com/*",
+        "*://*.kodik.biz/*",
+        "*://*.kodik.cc/*",
+        "*://*.aniboom.one/*",
+        "*://*.alloha.tv/*",
+        "*://*.cvh.tv/*"
+      ],
+      "js": ["content.js"],
+      "all_frames": true
+    }
+  ]
+}
