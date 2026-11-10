@@ -124,13 +124,11 @@ async function findAnimeCover(searchQuery) {
 }
 
 function buildActivity() {
-  // Если нет подключения или названия, не показываем ничего
   if (!isBrowserConnected || !meta.title) return null;
 
   const activity = { instance: false, activityType: 3 };
   activity.details = meta.title;
 
-  // Если видео еще грузится (длительность 0), показываем "Загрузку"
   if (progress.duration > 0) {
       const percent = Math.min(1, Math.max(0, progress.currentTime / progress.duration));
       const filled = Math.floor(percent * 10);
@@ -165,7 +163,7 @@ async function updateDiscord() {
   
   if (!activity) {
       if (lastActivityJson !== '') {
-          try { await rpc.clearActivity(); lastActivityJson = ''; } catch (e) {}
+          try { await rpc.clearActivity(); lastActivityJson = ''; console.log('🛑 Статус очищен.'); } catch (e) {}
       }
       return;
   }
@@ -180,12 +178,12 @@ async function updateDiscord() {
   } catch (e) {}
 }
 
-// Сторожевой таймер (УВЕЛИЧЕН ДО 65 СЕКУНД, чтобы Chrome не сбрасывал статус в фоне)
+// Сторожевой таймер: если 15 секунд нет данных от видео, очищаем статус
 setInterval(() => {
-    if (progress.duration > 0 && Date.now() - lastVideoTime > 65000) {
-        console.log('🛑 Нет данных от видео 65 секунд. Очищаю статус.');
+    if (progress.duration > 0 && Date.now() - lastVideoTime > 15000) {
+        console.log('🛑 Нет данных от видео 15 секунд. Очищаю статус.');
         progress.duration = 0; progress.currentTime = 0; 
-        meta.title = ''; // Сбрасываем название, чтобы статус исчез
+        meta.title = ''; 
         lastDiscordUpdate = 0;
         updateDiscord();
     }
@@ -226,7 +224,7 @@ wss.on('connection', (ws) => {
         } else if (data.type === 'videoplayer') {
           if (data.duration && data.duration < 60) return; 
           
-          lastVideoTime = Date.now(); // Обновляем время получения данных
+          lastVideoTime = Date.now(); 
           if (data.duration) progress.duration = data.duration;
           if (data.isPaused !== undefined) progress.isPaused = data.isPaused;
           if (data.episode) progress.episode = data.episode;
