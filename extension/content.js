@@ -1,9 +1,11 @@
+console.log('%c[RPC] СКРИПТ ЗАПУЩЕН НА: ' + window.location.hostname, 'color: lime; font-size: 16px; font-weight: bold;');
+
 const SUPPORTED_DOMAINS = ['yummyani.me', 'yummyanime.tv', 'animego.me', 'wwwanitype.fun', 'kodik', 'aniboom', 'alloha', 'cvh'];
 if (!SUPPORTED_DOMAINS.some(domain => window.location.hostname.includes(domain))) {
-    console.log('[RPC] Левый домен, игнорируем:', window.location.hostname);
+    console.log('[RPC] Левый домен, игнорируем.');
 } else {
-    console.log('%c[RPC] СКРИПТ ЗАПУЩЕН: ' + window.location.hostname, 'color: lime; font-weight: bold;');
-
+    const isKodik = window.location.hostname.includes('kodik');
+    
     function getCleanTitle() {
         let titleEl = document.querySelector('h1[itemprop="name"]') || document.querySelector('h1.anime-title') || document.querySelector('h1');
         let title = titleEl ? titleEl.innerText.trim() : '';
@@ -11,14 +13,22 @@ if (!SUPPORTED_DOMAINS.some(domain => window.location.hostname.includes(domain))
         return title.split('—')[0].split('|')[0].split('смотреть')[0].split('онлайн')[0].trim();
     }
 
+    // --- УЛУЧШЕННЫЙ ПОИСК АНГЛИЙСКОГО НАЗВАНИЯ ---
     function getEnglishTitle() {
-        const enSelectors = ['.anime-title-en', '.alternative-title', '[itemprop="alternativeHeadline"]'];
-        for (let sel of enSelectors) {
-            let el = document.querySelector(sel);
-            if (el && /[a-zA-Z]/.test(el.innerText)) return el.innerText.trim();
+        // 1. Ищем в блоке альтернативных названий (YummyAnime, AnimeGO)
+        const altNames = document.querySelectorAll('.alt-names-list li, .anime-info .eng-name');
+        for (let li of altNames) {
+            if (/[a-zA-Z]/.test(li.innerText) && li.innerText.length > 2) {
+                // Берем первую строчку с латиницей
+                return li.innerText.trim();
+            }
         }
+        
+        // 2. Ищем в мета-тегах
         const ogTitle = document.querySelector('meta[property="og:title"]');
-        if (ogTitle && /[a-zA-Z]/.test(ogTitle.content)) return ogTitle.content.replace(/^#/, '').split(':')[0].split('|')[0].trim();
+        if (ogTitle && /[a-zA-Z]/.test(ogTitle.content)) {
+            return ogTitle.content.replace(/^#/, '').split(':')[0].split('|')[0].trim();
+        }
         return null;
     }
 
@@ -33,7 +43,6 @@ if (!SUPPORTED_DOMAINS.some(domain => window.location.hostname.includes(domain))
 
     setInterval(() => {
         if (!chrome.runtime?.id) return;
-        if (document.visibilityState === 'hidden') return; 
 
         let payload = null;
         const videos = Array.from(document.querySelectorAll('video'));
@@ -45,14 +54,20 @@ if (!SUPPORTED_DOMAINS.some(domain => window.location.hostname.includes(domain))
             if (urlMatch) episode = urlMatch[1];
             
             payload = { type: "videoplayer", episode: episode, currentTime: mainVideo.currentTime, duration: mainVideo.duration, isPaused: mainVideo.paused, dubbing: 'Неизвестно' };
-        } else {
+        } else if (!isKodik) {
             const title = getCleanTitle();
             if (title.length > 2) {
                 const englishTitle = getEnglishTitle();
-                payload = { type: "website", title: title, searchTitle: englishTitle || title.split(':')[0].replace(/\.\d/g, '').trim(), dubbing: getDubbing() };
+                // Если нашли английское - отправляем его, если нет - отправляем русское
+                const searchTitle = englishTitle || title; 
+                
+                payload = { type: "website", title: title, searchTitle: searchTitle, dubbing: getDubbing() };
+                console.log(`[RPC] Найдено: "${title}" | Для поиска: "${searchTitle}"`);
             }
         }
 
-        if (payload) chrome.runtime.sendMessage({ type: "animepresence", payload: payload });
+        if (payload) {
+            chrome.runtime.sendMessage({ type: "animepresence", payload: payload });
+        }
     }, 3000);
 }

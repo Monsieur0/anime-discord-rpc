@@ -13,12 +13,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const configPath = path.join(__dirname, '../config.json');
-if (!fs.existsSync(configPath)) {
-    console.error('❌ ОШИБКА: Файл config.json не найден!');
-    console.log('Запусти установку: npm run setup');
-    process.exit(1);
-}
-
+if (!fs.existsSync(configPath)) { process.exit(1); }
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const CLIENT_ID = config.clientId;
 const PORT = config.port || 3000;
@@ -33,6 +28,8 @@ let lastVideoTime = 0;
 let lastDiscordUpdate = 0;
 let isBrowserConnected = false; 
 const imageCache = new Map();
+
+// ХАРДКОДА БОЛЬШЕ НЕТ. ВСЁ ИЩЕТСЯ АВТОМАТИЧЕСКИ.
 
 let reconnectAttempts = 0;
 const MAX_ATTEMPTS = 3;
@@ -66,38 +63,103 @@ async function fetchWithTimeout(url, options = {}, timeout = 4000) {
   } catch (e) { return null; } finally { clearTimeout(id); }
 }
 
-async function fetchFromAniList(query) {
-  const data = await fetchWithTimeout('https://graphql.anilist.co', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query: `query ($search: String) { Media(search: $search, type: ANIME) { coverImage { extraLarge } } }`, variables: { search: query } })
-  });
-  return data?.data?.Media?.coverImage?.extraLarge || null;
+async function translateToEnglish(text) {
+    console.log(`   🌐 Перевожу: "${text}"`);
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ru|en`;
+    const data = await fetchWithTimeout(url);
+    if (data?.responseData?.translatedText) {
+        return data.responseData.translatedText;
+    }
+    return null;
 }
 
-async function fetchFromKitsu(query) {
-  const url = `https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(query)}&page%5Blimit%5D=1`;
-  const data = await fetchWithTimeout(url, { headers: { 'Accept': 'application/vnd.api+json' } });
-  return data?.data?.[0]?.attributes?.posterImage?.original || null;
+async function getEnglishTitleFromShikimori(query) {
+    const targetUrl = `https://shikimori.one/api/animes?search=${encodeURIComponent(query)}&limit=1`;
+    const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+    const data = await fetchWithTimeout(proxyUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3000);
+    if (data && data[0]) {
+        console.log(`   🇬🇧 Shikimori: "${data[0].english || data[0].name}"`);
+        return data[0].english || data[0].name; 
+    }
+    return null;
 }
 
-async function fetchFromJikan(query) {
-  const data = await fetchWithTimeout(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(query)}&limit=1`);
-  if (data?.data?.[0]?.images?.jpg?.large_image_url) {
-      return `https://wsrv.nl/?url=${encodeURIComponent(data.data[0].images.jpg.large_image_url)}&output=jpg&w=512&h=512&fit=cover`;
-  }
-  return null;
+async function findCoverByEnglish(englishTitle) {
+    let rawUrl = null;
+
+    // 1. AniList
+    try {
+        const aniListData = await fetchWithTimeout('https://graphql.anilist.co', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: `query ($search: String) { Media(search: $search, type: ANIME) { coverImage { extraLarge } } }`, variables: { search: englishTitle } })
+        });
+        if (aniListData?.data?.Media?.coverImage?.extraLarge) {
+            rawUrl = aniListData.data.Media.coverImage.extraLarge;
+            console.log(`   ✅ AniList: ${rawUrl.slice(0, 50)}...`);
+            if (rawUrl.length <= 256) return rawUrl;
+        }
+    } catch (e) {}
+
+    // 2. Kitsu
+    try {
+        const kitsuData = await fetchWithTimeout(`https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(englishTitle)}&page%5Blimit%5D=1`, { headers: { 'Accept': 'application/vnd.api+json' } });
+        if (kitsuData?.data?.[0]?.attributes?.posterImage?.original) {
+            rawUrl = kitsuData.data[0].attributes.posterImage.original;
+            console.log(`   ✅ Kitsu: ${rawUrl.slice(0, 50)}...`);
+            if (rawUrl.length <= 256) return rawUrl;
+        }
+    } catch (e) {}
+
+    // 3. Simkl
+    try {
+        const simklSearch = await fetchWithTimeout(`https://api.simkl.org/search/anime?q=${encodeURIComponent(englishTitle)}`);
+        if (simklSearch && simklSearch.length > 0 && simklSearch[0].poster) {
+            const simklPosterPath = simklSearch[0].poster;
+            const fullSimklUrl = `https://simkl.in/posters/${simklPosterPath}_m.webp`;
+            rawUrl = `https://images.weserv.nl/?url=${encodeURIComponent(fullSimklUrl)}&w=512&h=512&fit=cover&output=jpg`;
+            console.log(`   ✅ Simkl (прокси): ${rawUrl.slice(0, 50)}...`);
+            if (rawUrl.length <= 256) return rawUrl;
+        }
+    } catch (e) {}
+
+    // 4. Jikan
+    try {
+        const jikanData = await fetchWithTimeout(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(englishTitle)}&limit=1`);
+        if (jikanData?.data?.[0]?.images?.jpg?.large_image_url) {
+            rawUrl = jikanData.data[0].images.jpg.large_image_url;
+            console.log(`   ✅ Jikan: ${rawUrl.slice(0, 50)}...`);
+            if (rawUrl.length <= 256) return rawUrl;
+        }
+    } catch (e) {}
+
+    console.log('   ❌ Ни один источник не дал подходящей ссылки.');
+    return null; 
 }
 
 async function findAnimeCover(searchQuery) {
   if (!searchQuery) return null;
-  const cleanSearch = searchQuery.split('—')[0].split('|')[0].split('смотреть')[0].trim();
+  
+  const cleanSearch = searchQuery.split('—')[0].split('|')[0].split('смотреть')[0].trim().toLowerCase();
   if (imageCache.has(cleanSearch)) return imageCache.get(cleanSearch);
   
-  let img = await fetchFromAniList(cleanSearch); 
-  if (!img) img = await fetchFromKitsu(cleanSearch);
-  if (!img) img = await fetchFromJikan(cleanSearch);
+  console.log(`\n🔍 Ищу обложку для: "${cleanSearch}"`);
+
+  // Если пришло английское название (с латиницей) - ищем сразу
+  if (!/[а-яА-ЯёЁ]/.test(cleanSearch)) {
+      const img = await findCoverByEnglish(cleanSearch);
+      if (img) { imageCache.set(cleanSearch, img); return img; }
+  } 
+  // Если пришло русское - переводим
+  else {
+      let englishTitle = await getEnglishTitleFromShikimori(cleanSearch);
+      if (!englishTitle) englishTitle = await translateToEnglish(cleanSearch);
+      if (englishTitle) {
+          const img = await findCoverByEnglish(englishTitle);
+          if (img) { imageCache.set(cleanSearch, img); return img; }
+      }
+  }
   
-  if (img) { imageCache.set(cleanSearch, img); return img; }
+  console.log('❌ Обложка не найдена.');
   return null; 
 }
 
@@ -116,8 +178,7 @@ function buildActivity() {
   
   activity.state = `${actionText} ${dubText}[${bar}] ${Math.round(percent * 100)}% ${epText}`.trim();
 
-  // Ставим ТОЛЬКО постер. Никаких play/pause и заглушек.
-  if (meta.poster && meta.poster.startsWith('http')) {
+  if (meta.poster && meta.poster.startsWith('http') && meta.poster.length <= 256) {
     activity.largeImageKey = meta.poster;
     activity.largeImageText = meta.title;
   }
