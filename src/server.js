@@ -24,12 +24,10 @@ let progress = { episode: '?', dubbing: 'Неизвестно', currentTime: 0, 
 
 let currentStartTimestamp = null;
 let lastActivityJson = '';
-let lastVideoTime = 0; 
+let lastVideoTime = Date.now(); // Инициализируем текущим временем
 let lastDiscordUpdate = 0;
 let isBrowserConnected = false; 
 const imageCache = new Map();
-
-// ХАРДКОДА БОЛЬШЕ НЕТ. ВСЁ ИЩЕТСЯ АВТОМАТИЧЕСКИ.
 
 let reconnectAttempts = 0;
 const MAX_ATTEMPTS = 3;
@@ -48,7 +46,7 @@ function connectDiscord() {
             console.log(`❌ Discord IPC не готов (Попытка ${reconnectAttempts}/${MAX_ATTEMPTS}). Жду 10 сек...`);
             setTimeout(connectDiscord, RETRY_DELAY);
         } else {
-            console.log(`🛑 Discord не найден. Статус работать не будет.`);
+            console.log(`🛑 Discord не найден.`);
         }
     });
 }
@@ -63,94 +61,57 @@ async function fetchWithTimeout(url, options = {}, timeout = 4000) {
   } catch (e) { return null; } finally { clearTimeout(id); }
 }
 
-async function translateToEnglish(text) {
-    console.log(`   🌐 Перевожу: "${text}"`);
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ru|en`;
-    const data = await fetchWithTimeout(url);
-    if (data?.responseData?.translatedText) {
-        return data.responseData.translatedText;
+function processSitePoster(url) {
+    if (!url) return null;
+    if (/\.(avif|webp)$/i.test(url)) {
+        const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=jpg&w=512&h=512`;
+        if (proxyUrl.length <= 256) return proxyUrl;
     }
+    if (url.length <= 256 && /\.(jpg|jpeg|png)$/i.test(url)) return url;
+    const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=jpg&w=512&h=512`;
+    if (proxyUrl.length <= 256) return proxyUrl;
     return null;
 }
 
+async function translateToEnglish(text) {
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ru|en`;
+    const data = await fetchWithTimeout(url);
+    if (data?.responseData?.translatedText) return data.responseData.translatedText;
+    return null;
+}
 async function getEnglishTitleFromShikimori(query) {
     const targetUrl = `https://shikimori.one/api/animes?search=${encodeURIComponent(query)}&limit=1`;
     const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
     const data = await fetchWithTimeout(proxyUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3000);
-    if (data && data[0]) {
-        console.log(`   🇬🇧 Shikimori: "${data[0].english || data[0].name}"`);
-        return data[0].english || data[0].name; 
-    }
+    if (data && data[0]) return data[0].english || data[0].name; 
     return null;
 }
-
 async function findCoverByEnglish(englishTitle) {
-    let rawUrl = null;
-
-    // 1. AniList
     try {
         const aniListData = await fetchWithTimeout('https://graphql.anilist.co', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ query: `query ($search: String) { Media(search: $search, type: ANIME) { coverImage { extraLarge } } }`, variables: { search: englishTitle } })
         });
-        if (aniListData?.data?.Media?.coverImage?.extraLarge) {
-            rawUrl = aniListData.data.Media.coverImage.extraLarge;
-            console.log(`   ✅ AniList: ${rawUrl.slice(0, 50)}...`);
-            if (rawUrl.length <= 256) return rawUrl;
-        }
+        if (aniListData?.data?.Media?.coverImage?.extraLarge) return aniListData.data.Media.coverImage.extraLarge;
     } catch (e) {}
-
-    // 2. Kitsu
-    try {
-        const kitsuData = await fetchWithTimeout(`https://kitsu.io/api/edge/anime?filter[text]=${encodeURIComponent(englishTitle)}&page%5Blimit%5D=1`, { headers: { 'Accept': 'application/vnd.api+json' } });
-        if (kitsuData?.data?.[0]?.attributes?.posterImage?.original) {
-            rawUrl = kitsuData.data[0].attributes.posterImage.original;
-            console.log(`   ✅ Kitsu: ${rawUrl.slice(0, 50)}...`);
-            if (rawUrl.length <= 256) return rawUrl;
-        }
-    } catch (e) {}
-
-    // 3. Simkl
-    try {
-        const simklSearch = await fetchWithTimeout(`https://api.simkl.org/search/anime?q=${encodeURIComponent(englishTitle)}`);
-        if (simklSearch && simklSearch.length > 0 && simklSearch[0].poster) {
-            const simklPosterPath = simklSearch[0].poster;
-            const fullSimklUrl = `https://simkl.in/posters/${simklPosterPath}_m.webp`;
-            rawUrl = `https://images.weserv.nl/?url=${encodeURIComponent(fullSimklUrl)}&w=512&h=512&fit=cover&output=jpg`;
-            console.log(`   ✅ Simkl (прокси): ${rawUrl.slice(0, 50)}...`);
-            if (rawUrl.length <= 256) return rawUrl;
-        }
-    } catch (e) {}
-
-    // 4. Jikan
     try {
         const jikanData = await fetchWithTimeout(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(englishTitle)}&limit=1`);
-        if (jikanData?.data?.[0]?.images?.jpg?.large_image_url) {
-            rawUrl = jikanData.data[0].images.jpg.large_image_url;
-            console.log(`   ✅ Jikan: ${rawUrl.slice(0, 50)}...`);
-            if (rawUrl.length <= 256) return rawUrl;
-        }
+        if (jikanData?.data?.[0]?.images?.jpg?.large_image_url) return jikanData.data[0].images.jpg.large_image_url;
     } catch (e) {}
-
-    console.log('   ❌ Ни один источник не дал подходящей ссылки.');
     return null; 
 }
 
 async function findAnimeCover(searchQuery) {
   if (!searchQuery) return null;
-  
-  const cleanSearch = searchQuery.split('—')[0].split('|')[0].split('смотреть')[0].trim().toLowerCase();
+  const cleanSearch = searchQuery.split('—')[0].split('|')[0].split('смотреть')[0].replace(/[!?.,:;…—–\-_]/g, ' ').trim().toLowerCase();
   if (imageCache.has(cleanSearch)) return imageCache.get(cleanSearch);
   
-  console.log(`\n🔍 Ищу обложку для: "${cleanSearch}"`);
+  console.log(`\n🔍 [API Fallback] Ищу обложку для: "${cleanSearch}"`);
 
-  // Если пришло английское название (с латиницей) - ищем сразу
   if (!/[а-яА-ЯёЁ]/.test(cleanSearch)) {
       const img = await findCoverByEnglish(cleanSearch);
       if (img) { imageCache.set(cleanSearch, img); return img; }
-  } 
-  // Если пришло русское - переводим
-  else {
+  } else {
       let englishTitle = await getEnglishTitleFromShikimori(cleanSearch);
       if (!englishTitle) englishTitle = await translateToEnglish(cleanSearch);
       if (englishTitle) {
@@ -158,25 +119,30 @@ async function findAnimeCover(searchQuery) {
           if (img) { imageCache.set(cleanSearch, img); return img; }
       }
   }
-  
-  console.log('❌ Обложка не найдена.');
+  console.log('❌ API не нашли обложку.');
   return null; 
 }
 
 function buildActivity() {
-  if (!isBrowserConnected || progress.duration === 0 || !meta.title) return null;
+  // Если нет подключения или названия, не показываем ничего
+  if (!isBrowserConnected || !meta.title) return null;
 
   const activity = { instance: false, activityType: 3 };
   activity.details = meta.title;
-  
-  const percent = Math.min(1, Math.max(0, progress.currentTime / progress.duration));
-  const filled = Math.floor(percent * 10);
-  const bar = '▰'.repeat(Math.max(1, filled)) + '▱'.repeat(10 - Math.max(1, filled));
-  let epText = progress.episode !== '?' ? `E${progress.episode}` : ''; 
-  const dubText = progress.dubbing !== 'Неизвестно' ? `[${progress.dubbing}] ` : '';
-  const actionText = progress.isPaused ? 'Перевариваю ⏸' : 'Смотрю ▶';
-  
-  activity.state = `${actionText} ${dubText}[${bar}] ${Math.round(percent * 100)}% ${epText}`.trim();
+
+  // Если видео еще грузится (длительность 0), показываем "Загрузку"
+  if (progress.duration > 0) {
+      const percent = Math.min(1, Math.max(0, progress.currentTime / progress.duration));
+      const filled = Math.floor(percent * 10);
+      const bar = '▰'.repeat(Math.max(1, filled)) + '▱'.repeat(10 - Math.max(1, filled));
+      let epText = progress.episode !== '?' ? `E${progress.episode}` : ''; 
+      const dubText = progress.dubbing !== 'Неизвестно' ? `[${progress.dubbing}] ` : '';
+      const actionText = progress.isPaused ? 'Перевариваю ⏸' : 'Смотрю ▶';
+      
+      activity.state = `${actionText} ${dubText}[${bar}] ${Math.round(percent * 100)}% ${epText}`.trim();
+  } else {
+      activity.state = 'Загрузка плеера...';
+  }
 
   if (meta.poster && meta.poster.startsWith('http') && meta.poster.length <= 256) {
     activity.largeImageKey = meta.poster;
@@ -214,23 +180,15 @@ async function updateDiscord() {
   } catch (e) {}
 }
 
+// Сторожевой таймер (УВЕЛИЧЕН ДО 65 СЕКУНД, чтобы Chrome не сбрасывал статус в фоне)
 setInterval(() => {
-    if (progress.duration > 0 && Date.now() - lastVideoTime > 10000) {
-        progress.duration = 0; progress.currentTime = 0; lastDiscordUpdate = 0;
+    if (progress.duration > 0 && Date.now() - lastVideoTime > 65000) {
+        console.log('🛑 Нет данных от видео 65 секунд. Очищаю статус.');
+        progress.duration = 0; progress.currentTime = 0; 
+        meta.title = ''; // Сбрасываем название, чтобы статус исчез
+        lastDiscordUpdate = 0;
         updateDiscord();
     }
-}, 5000);
-
-setInterval(() => {
-  if (wss.clients.size === 0 && isBrowserConnected) {
-      console.log('🛑 Вкладка отключилась. Очищаю статус.');
-      isBrowserConnected = false; 
-      meta = { title: '', poster: '' };
-      progress = { episode: '?', dubbing: 'Неизвестно', currentTime: 0, duration: 0, isPaused: false };
-      currentStartTimestamp = null; 
-      lastDiscordUpdate = 0; 
-      updateDiscord();
-  }
 }, 5000);
 
 wss.on('connection', (ws) => {
@@ -250,14 +208,25 @@ wss.on('connection', (ws) => {
           if (data.title && data.title !== meta.title) {
             console.log(`📄 Новое аниме: ${data.title}`);
             meta.title = data.title; meta.poster = ''; lastDiscordUpdate = 0; updateDiscord(); 
-            findAnimeCover(data.searchTitle).then(posterUrl => {
-                if (posterUrl) { meta.poster = posterUrl; lastDiscordUpdate = 0; updateDiscord(); }
-            });
+            
+            let sitePoster = processSitePoster(data.sitePosterUrl);
+            
+            if (sitePoster) {
+                console.log(`   ✅ Использую картинку с сайта: ${sitePoster}`);
+                meta.poster = sitePoster;
+                lastDiscordUpdate = 0;
+                updateDiscord();
+            } else {
+                console.log(`   ⚠️ Картинка с сайта не подошла. Ищу в API...`);
+                findAnimeCover(data.searchTitle).then(posterUrl => {
+                    if (posterUrl) { meta.poster = posterUrl; lastDiscordUpdate = 0; updateDiscord(); }
+                });
+            }
           }
         } else if (data.type === 'videoplayer') {
           if (data.duration && data.duration < 60) return; 
           
-          lastVideoTime = Date.now(); 
+          lastVideoTime = Date.now(); // Обновляем время получения данных
           if (data.duration) progress.duration = data.duration;
           if (data.isPaused !== undefined) progress.isPaused = data.isPaused;
           if (data.episode) progress.episode = data.episode;

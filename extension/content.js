@@ -13,23 +13,67 @@ if (!SUPPORTED_DOMAINS.some(domain => window.location.hostname.includes(domain))
         return title.split('—')[0].split('|')[0].split('смотреть')[0].split('онлайн')[0].trim();
     }
 
-    // --- УЛУЧШЕННЫЙ ПОИСК АНГЛИЙСКОГО НАЗВАНИЯ ---
     function getEnglishTitle() {
-        // 1. Ищем в блоке альтернативных названий (YummyAnime, AnimeGO)
-        const altNames = document.querySelectorAll('.alt-names-list li, .anime-info .eng-name');
-        for (let li of altNames) {
-            if (/[a-zA-Z]/.test(li.innerText) && li.innerText.length > 2) {
-                // Берем первую строчку с латиницей
-                return li.innerText.trim();
+        const enSelectors = ['.anime-title-en', '.alternative-title', '[itemprop="alternativeHeadline"]', '.alt-names-list li'];
+        for (let sel of enSelectors) {
+            let els = document.querySelectorAll(sel);
+            for (let el of els) {
+                if (/[a-zA-Z]/.test(el.innerText) && el.innerText.length > 2) return el.innerText.trim();
             }
         }
-        
-        // 2. Ищем в мета-тегах
         const ogTitle = document.querySelector('meta[property="og:title"]');
-        if (ogTitle && /[a-zA-Z]/.test(ogTitle.content)) {
-            return ogTitle.content.replace(/^#/, '').split(':')[0].split('|')[0].trim();
-        }
+        if (ogTitle && /[a-zA-Z]/.test(ogTitle.content)) return ogTitle.content.replace(/^#/, '').split(':')[0].split('|')[0].trim();
         return null;
+    }
+
+    // --- ПОЛНОСТЬЮ АВТОМАТИЧЕСКИЙ ПОИСК КАРТИНКИ ---
+    function getPosterUrl() {
+        // 1. Универсальные мета-теги (работают почти везде)
+        const metaSelectors = [
+            'meta[property="og:image"]',
+            'meta[name="twitter:image"]',
+            'meta[property="twitter:image"]',
+            'link[rel="image_src"]'
+        ];
+        for (let sel of metaSelectors) {
+            let el = document.querySelector(sel);
+            if (el) {
+                let url = el.content || el.href;
+                if (url) {
+                    if (url.startsWith('//')) url = 'https:' + url; // Добавляем протокол
+                    if (url.startsWith('http')) return url;
+                }
+            }
+        }
+
+        // 2. Если мета-тегов нет, ищем САМУЮ БОЛЬШУЮ картинку на странице
+        const images = Array.from(document.querySelectorAll('img'));
+        let bestImage = null;
+        let maxArea = 0;
+
+        for (let img of images) {
+            // Берем data-full (там часто оригинал), если нет - src
+            let src = img.getAttribute('data-full') || img.src || img.getAttribute('data-src');
+            if (!src) continue;
+            
+            if (src.startsWith('//')) src = 'https:' + src;
+            if (!src.startsWith('http')) continue;
+
+            // Получаем размеры картинки (даже если она не загрузилась, берем атрибуты)
+            const w = img.naturalWidth || img.width || img.clientWidth || 0;
+            const h = img.naturalHeight || img.height || img.clientHeight || 0;
+            
+            // Отсеиваем мелкие иконки и баннеры
+            if (w < 150 || h < 150) continue; 
+
+            const area = w * h;
+            if (area > maxArea) {
+                maxArea = area;
+                bestImage = src;
+            }
+        }
+
+        return bestImage;
     }
 
     function getDubbing() {
@@ -58,11 +102,16 @@ if (!SUPPORTED_DOMAINS.some(domain => window.location.hostname.includes(domain))
             const title = getCleanTitle();
             if (title.length > 2) {
                 const englishTitle = getEnglishTitle();
-                // Если нашли английское - отправляем его, если нет - отправляем русское
-                const searchTitle = englishTitle || title; 
+                const sitePoster = getPosterUrl(); 
                 
-                payload = { type: "website", title: title, searchTitle: searchTitle, dubbing: getDubbing() };
-                console.log(`[RPC] Найдено: "${title}" | Для поиска: "${searchTitle}"`);
+                payload = { 
+                    type: "website", 
+                    title: title, 
+                    searchTitle: englishTitle || title, 
+                    sitePosterUrl: sitePoster, 
+                    dubbing: getDubbing() 
+                };
+                console.log(`[RPC] Найдено: "${title}" | Постер с сайта: ${sitePoster ? 'Да' : 'Нет'}`);
             }
         }
 
