@@ -12,7 +12,6 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// Проверяем наличие конфига
 const configPath = path.join(__dirname, '../config.json');
 if (!fs.existsSync(configPath)) {
     console.error('❌ ОШИБКА: Файл config.json не найден!');
@@ -23,8 +22,6 @@ if (!fs.existsSync(configPath)) {
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const CLIENT_ID = config.clientId;
 const PORT = config.port || 3000;
-
-console.log(`🔑 Загружен Client ID: ${CLIENT_ID ? CLIENT_ID.slice(0, 5) + '...' : 'НЕТ'}`);
 
 let rpc = new RPC.Client({ transport: 'ipc' });
 let meta = { title: '', poster: '' };
@@ -46,7 +43,7 @@ function connectDiscord() {
     rpc.on('ready', async () => {
         console.log('✅ Discord RPC подключен!');
         reconnectAttempts = 0; 
-        try { await rpc.clearActivity(); } catch (e) {} // Очищаем старый статус
+        try { await rpc.clearActivity(); } catch (e) {} 
     });
     rpc.login({ clientId: CLIENT_ID }).catch(e => {
         reconnectAttempts++;
@@ -54,12 +51,11 @@ function connectDiscord() {
             console.log(`❌ Discord IPC не готов (Попытка ${reconnectAttempts}/${MAX_ATTEMPTS}). Жду 10 сек...`);
             setTimeout(connectDiscord, RETRY_DELAY);
         } else {
-            console.log(`🛑 Discord не найден.`);
+            console.log(`🛑 Discord не найден. Статус работать не будет.`);
         }
     });
 }
 
-// --- ПОИСК КАРТИНОК ---
 async function fetchWithTimeout(url, options = {}, timeout = 4000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
@@ -105,9 +101,7 @@ async function findAnimeCover(searchQuery) {
   return null; 
 }
 
-// --- СБОРКА СТАТУСА ---
 function buildActivity() {
-  // Если браузер не подключен, статус не ставим
   if (!isBrowserConnected || progress.duration === 0 || !meta.title) return null;
 
   const activity = { instance: false, activityType: 3 };
@@ -122,12 +116,12 @@ function buildActivity() {
   
   activity.state = `${actionText} ${dubText}[${bar}] ${Math.round(percent * 100)}% ${epText}`.trim();
 
+  // Ставим ТОЛЬКО постер. Никаких play/pause и заглушек.
   if (meta.poster && meta.poster.startsWith('http')) {
     activity.largeImageKey = meta.poster;
     activity.largeImageText = meta.title;
   }
   
-  activity.smallImageKey = progress.isPaused ? 'pause' : 'play';
   if (currentStartTimestamp && progress.duration > 1 && !progress.isPaused) {
       activity.startTimestamp = currentStartTimestamp;
   }
@@ -159,7 +153,6 @@ async function updateDiscord() {
   } catch (e) {}
 }
 
-// Таймеры для очистки
 setInterval(() => {
     if (progress.duration > 0 && Date.now() - lastVideoTime > 10000) {
         progress.duration = 0; progress.currentTime = 0; lastDiscordUpdate = 0;
@@ -179,7 +172,6 @@ setInterval(() => {
   }
 }, 5000);
 
-// --- WEBSOCKET ---
 wss.on('connection', (ws) => {
     isBrowserConnected = true;
     console.log('🔌 Браузер подключен!');
